@@ -50,24 +50,36 @@
 
 完整記錄改造目標、現有架構、三個改造模組、Roadmap、風險。
 
+### 4. AI 後端接線（去 AI CLI 化）
+
+- **`web/src/app/api/config/key/route.ts`**：key 寫入 root `.env` 的端點（原子寫入 + 備份、合併式、只動 key 相關欄位、不覆蓋其他設定）
+- **`web/src/components/config-form.tsx`**：啟用「Paste an AI key」和「No setup needed」選項，支援 Gemini / OpenAI 相容 / Ollama 三種後端 + 測試連線按鈕
+- **`web/src/app/api/eval/route.ts`**：新增 `test` 模式（跳過 cv.md 檢查、`--no-save` 不寫報告）
+
+### 5. 啟動器修復（實際驗證時發現的問題）
+
+- **port 衝突**：VS Code 佔用 3000/3001，改用 **3100**（`npm run dev -- -p 3100`）
+- **根目錄依賴**：評估器（gemini-eval.mjs 等）在根目錄執行，需要根目錄的 `@google/generative-ai`/`dotenv`/`js-yaml`。啟動器補上 `npm install --ignore-scripts`（跳過 Playwright Chromium 下載，評估器用不到）
+- **rootScript 副檔名 bug**：`rootScript()` 會自動加 `.mjs`，傳 `"gemini-eval.mjs"` 會變成 `.mjs.mjs`，改傳 bare name
+
 ---
 
-## 🔧 進行中（尚未完成）
+## ✅ Phase 1 已完成（2026-09-07）
 
-### config-form.tsx 接線（AI 後端選擇 UI）
+三個缺口全部補上，並已實際啟動驗證：
 
-- 現況：`web/src/components/config-form.tsx` 的「Paste an AI key」和「No setup needed」選項目前是 `disabled`（寫著 "Coming soon"）
-- 要做：啟用選項，讓使用者選 Gemini / OpenAI 相容 / Ollama 三種後端，加 key 輸入欄位 + 模型選擇 + 測試連線按鈕
-- **已確認的決策**：key 用**做法 A**（寫入 root 的 `.env`，新增 `/api/config/key` 端點原子寫入），符合專案安全原則（評估器本來就用 dotenv 讀 `.env`）
+1. ✅ 啟動太技術 → 三平台雙擊啟動器
+2. ✅ 評估綁 AI CLI → `/api/eval` + 設定頁可選 Gemini/Ollama/OpenAI
+3. ✅ 要裝 Node → 啟動器自動偵測/引導
+
+**驗證結果**：Next.js 在 3100 成功啟動（5.7s 就緒）、首頁回應 200、`/api/config/key` 和 `/api/eval` 正常回應、Ollama 後端偵測到 `llava:7b` 模型。
 
 ---
 
 ## ⏭ 下一步待辦
 
-- [ ] 新增 `/api/config/key` 端點（原子寫入 root `.env`，只寫 key 相關欄位，不覆蓋其他設定）
-- [ ] 改 `config-form.tsx`：啟用「Paste an AI key」模式，接上 `/api/eval` 和 `/api/config/key`
-- [ ] 加「測試連線」按鈕（驗證 key 有效）
 - [ ] 找一個非技術人士，從零開始雙擊啟動 → 掃描 → 評估 → 看報告（驗證 MVP）
+- [ ] 使用者實際設定 Gemini key 或選 Ollama，跑一次真實評估
 
 ### Phase 2（體驗打磨，之後再做）
 
