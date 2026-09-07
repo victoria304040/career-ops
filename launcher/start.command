@@ -43,13 +43,23 @@ else
     echo
 fi
 
+# 安裝根目錄依賴（評估器需要），跳過 Chromium 下載
+cd "$(dirname "$0")/.."
+if [ ! -d "node_modules/@google/generative-ai" ]; then
+    echo "[首次執行] 正在安裝評估器元件..."
+    npm install --ignore-scripts || { echo "[錯誤] 評估器元件安裝失敗。"; read -r -p "按 Enter 結束..."; exit 1; }
+    echo "[OK] 評估器元件安裝完成"
+    echo
+fi
+cd "$(dirname "$0")/../web"
+
 echo "正在啟動，瀏覽器會自動開啟..."
 echo "使用期間請「不要關閉」這個視窗。要結束時關閉此視窗即可。"
 echo
 
-# 4. 延遲開瀏覽器 + 啟動伺服器
-( sleep 3; open "http://localhost:3000" ) &
-npm run dev
+# 4. 延遲開瀏覽器 + 啟動伺服器（用 3100 埠，避免與其他程式衝突）
+( sleep 3; open "http://localhost:3100" ) &
+npm run dev -- -p 3100
 
 echo
 echo "伺服器已停止。"

@@ -26,10 +26,11 @@ type EvalBody = {
   test?: boolean; // connection test: skip cv.md guard + don't save a report
 };
 
+// rootScript() appends ".mjs" itself, so these are the bare names.
 const SCRIPT: Record<EvalBackend, string> = {
-  gemini: "gemini-eval.mjs",
-  openai: "openai-eval.mjs",
-  ollama: "ollama-eval.mjs",
+  gemini: "gemini-eval",
+  openai: "openai-eval",
+  ollama: "ollama-eval",
 };
 
 // A posting URL is the tracker's dedup key; only accept a complete http(s) URL
@@ -59,7 +60,7 @@ export async function POST(req: Request) {
   const script = rootScript(SCRIPT[backend]);
   if (!fs.existsSync(script)) {
     return new Response(
-      JSON.stringify({ error: `This needs a complete career-ops checkout (${SCRIPT[backend]}).` }),
+      JSON.stringify({ error: `This needs a complete career-ops checkout (${SCRIPT[backend]}.mjs).` }),
       { status: 400, headers: { "Content-Type": "application/json" } },
     );
   }
