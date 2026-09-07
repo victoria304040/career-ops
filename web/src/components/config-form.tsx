@@ -25,12 +25,17 @@ type Cli = {
 
 type Mode = "cli" | "key" | "manual";
 
+// The three standalone evaluators (gemini-eval.mjs / openai-eval.mjs /
+// ollama-eval.mjs) — these score a JD against cv.md WITHOUT any AI CLI. The
+// "key" mode wires them up so a non-technical user can pick a backend instead
+// of installing an AI tool.
 const PROVIDERS = [
-  { id: "anthropic", label: "Anthropic (Claude)" },
-  { id: "openai", label: "OpenAI" },
-  { id: "google", label: "Google (Gemini)" },
-  { id: "openrouter", label: "OpenRouter" },
+  { id: "gemini", label: "Google (Gemini)", needsKey: true, needsUrl: false, hint: "Free tier available" },
+  { id: "openai", label: "OpenAI-compatible", needsKey: true, needsUrl: true, hint: "OpenAI, OpenRouter, DeepSeek…" },
+  { id: "ollama", label: "Local (Ollama)", needsKey: false, needsUrl: false, hint: "Free, fully offline" },
 ] as const;
+
+type ProviderId = (typeof PROVIDERS)[number]["id"];
 
 const STORAGE_KEY = "career-ops:config";
 
@@ -38,10 +43,15 @@ export function ConfigForm() {
   const [mode, setMode] = useState<Mode>("cli");
   const [clis, setClis] = useState<Cli[] | null>(null);
   const [cliId, setCliId] = useState<string>("");
-  const [provider, setProvider] = useState("anthropic");
+  const [provider, setProvider] = useState<ProviderId>("gemini");
   const [apiKey, setApiKey] = useState("");
+  const [apiUrl, setApiUrl] = useState("");
+  const [apiModel, setApiModel] = useState("");
   const [logos, setLogos] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
 
   // Load saved prefs
   useEffect(() => {
@@ -49,11 +59,13 @@ export function ConfigForm() {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const v = JSON.parse(raw);
-        // key/manual are not wired yet (nothing reads them) → never restore into
-        // those dead panels; only the Installed-CLI path is functional.
+        // key/manual are now wired up: restore the mode and provider so the
+        // user doesn't have to re-select them on every page load.
         if (v.mode === "cli") setMode("cli");
+        if (v.mode === "key") setMode("key");
+        if (v.mode === "manual") setMode("manual");
         if (v.cliId) setCliId(v.cliId);
-        if (v.provider) setProvider(v.provider);
+        if (v.provider) setProvider(v.provider as ProviderId);
         if (typeof v.logos === "boolean") setLogos(v.logos);
       }
     } catch {
@@ -81,13 +93,64 @@ export function ConfigForm() {
       .catch(() => setClis([]));
   }, []);
 
-  function save() {
-    // The API key is deliberately NOT persisted: nothing reads it yet (the
-    // key/manual panel is unwired) and a secret must never sit in clear-text
-    // localStorage. Keys belong in the user's own CLI/provider config.
+  async function save() {
+    setSaving(true);
+    // Persist UI prefs (mode/provider/logos) to localStorage — never the key.
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode, cliId, provider, logos }));
+
+    // In "key" mode, write the key (and url/model) into the core's own .env via
+    // /api/config/key — the single write path. The key never touches localStorage.
+    if (mode === "key") {
+      const backend = provider === "ollama" ? "ollama" : provider;
+      try {
+        const res = await fetch("/api/config/key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            backend,
+            key: apiKey || undefined,
+            url: apiUrl || undefined,
+            model: apiModel || undefined,
+          }),
+        });
+        if (!res.ok) {
+          setSaved(false);
+          setSaving(false);
+          return;
+        }
+      } catch {
+        setSaved(false);
+        setSaving(false);
+        return;
+      }
+    }
+
     setSaved(true);
+    setSaving(false);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/eval", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          backend: provider,
+          input: "This is a connection test. Reply with the single word: OK",
+          key: apiKey || undefined,
+          url: apiUrl || undefined,
+          model: apiModel || undefined,
+          test: true,
+        }),
+      });
+      setTestResult(res.ok ? "ok" : "fail");
+    } catch {
+      setTestResult("fail");
+    }
+    setTesting(false);
   }
 
   const installed = clis?.filter((c) => c.installed) ?? [];
@@ -116,16 +179,14 @@ export function ConfigForm() {
           onClick={() => setMode("key")}
           icon={KeyRound}
           title="Paste an AI key"
-          hint="Coming soon"
-          disabled
+          hint="No AI tool needed"
         />
         <ModeCard
           active={mode === "manual"}
           onClick={() => setMode("manual")}
           icon={TerminalSquare}
           title="No setup needed"
-          hint="Coming soon"
-          disabled
+          hint="Local & free"
         />
       </div>
 
@@ -224,12 +285,15 @@ export function ConfigForm() {
               <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
                 Provider
               </label>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-3">
                 {PROVIDERS.map((p) => (
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => setProvider(p.id)}
+                    onClick={() => {
+                      setProvider(p.id);
+                      setTestResult(null);
+                    }}
                     className={cn(
                       "rounded-xl border px-4 py-2.5 text-left text-sm transition-colors",
                       provider === p.id
@@ -237,34 +301,110 @@ export function ConfigForm() {
                         : "border-border bg-surface/50 text-muted hover:bg-surface-hover hover:text-foreground",
                     )}
                   >
-                    {p.label}
+                    <span className="block font-medium">{p.label}</span>
+                    <span className="mt-0.5 block text-xs text-faint">{p.hint}</span>
                   </button>
                 ))}
               </div>
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
-                Paste an AI key
-              </label>
-              <p className="mb-2 text-xs text-faint">Bring a key from OpenAI, Anthropic, and others.</p>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-                className="w-full rounded-xl border border-border bg-surface/60 px-4 py-2.5 font-mono text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50"
-              />
-              <p className="mt-2 text-xs text-faint">
-                Stored only in this browser — never sent anywhere but your chosen provider.
-              </p>
+
+            {provider === "ollama" ? (
+              <div className="rounded-xl border border-dashed border-border bg-surface/30 p-4 text-sm text-muted">
+                <p className="font-medium text-foreground">Local &amp; free — nothing to paste.</p>
+                <p className="mt-1 text-xs text-faint">
+                  Uses <a href="https://ollama.com" target="_blank" rel="noreferrer" className="text-brand hover:underline">Ollama</a> running
+                  on your computer. Install it, pull a model (e.g. <span className="font-mono">llama3.3</span>), and
+                  evaluation runs fully offline — your CV and job text never leave your machine.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                    API key
+                  </label>
+                  <p className="mb-2 text-xs text-faint">
+                    {provider === "gemini"
+                      ? "Get a free key at aistudio.google.com/apikey"
+                      : "Bring a key from OpenAI, OpenRouter, DeepSeek, or any compatible endpoint."}
+                  </p>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={provider === "gemini" ? "AIza…" : "sk-…"}
+                    autoComplete="off"
+                    className="w-full rounded-xl border border-border bg-surface/60 px-4 py-2.5 font-mono text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50"
+                  />
+                </div>
+
+                {provider === "openai" && (
+                  <>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                        Base URL <span className="font-normal normal-case text-faint">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={apiUrl}
+                        onChange={(e) => setApiUrl(e.target.value)}
+                        placeholder="https://api.openai.com/v1"
+                        autoComplete="off"
+                        className="w-full rounded-xl border border-border bg-surface/60 px-4 py-2.5 font-mono text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                        Model <span className="font-normal normal-case text-faint">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={apiModel}
+                        onChange={(e) => setApiModel(e.target.value)}
+                        placeholder="gpt-4o-mini"
+                        autoComplete="off"
+                        className="w-full rounded-xl border border-border bg-surface/60 px-4 py-2.5 font-mono text-sm outline-none transition-colors placeholder:text-faint focus:border-brand/50"
+                      />
+                    </div>
+                  </>
+                )}
+
+                <p className="text-xs text-faint">
+                  Stored only in your local <span className="font-mono">.env</span> file — never in the browser,
+                  never sent anywhere but your chosen provider.
+                </p>
+              </>
+            )}
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={testConnection}
+                disabled={testing}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-surface/50 px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-surface-hover disabled:opacity-55 max-sm:min-h-[44px]"
+              >
+                {testing ? <Loader2 className="size-4 animate-spin" /> : null}
+                {testing ? "Testing…" : "Test connection"}
+              </button>
+              {testResult === "ok" && (
+                <span className="inline-flex items-center gap-1 text-sm text-emerald-400">
+                  <Check className="size-4" /> Connected
+                </span>
+              )}
+              {testResult === "fail" && (
+                <span className="text-sm text-red-400">Connection failed — check your key.</span>
+              )}
             </div>
           </div>
         )}
 
         {mode === "manual" && (
           <div className="rounded-xl border border-dashed border-border bg-surface/30 p-4 text-sm text-muted">
-            The easiest way in — no keys, nothing to set up. On the roadmap.
+            <p className="font-medium text-foreground">No setup needed — local &amp; free.</p>
+            <p className="mt-1 text-xs text-faint">
+              This is the same as choosing <span className="text-foreground">Local (Ollama)</span> in the
+              &ldquo;Paste an AI key&rdquo; tab. Pick that option to run evaluation fully offline with no key.
+            </p>
           </div>
         )}
       </div>
@@ -306,12 +446,13 @@ export function ConfigForm() {
         <button
           type="button"
           onClick={save}
-          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-medium text-brand-foreground transition-colors hover:bg-brand-200 max-sm:min-h-[44px]"
+          disabled={saving}
+          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-medium text-brand-foreground transition-colors hover:bg-brand-200 disabled:opacity-55 max-sm:min-h-[44px]"
         >
-          {saved ? <Check className="size-4" /> : null}
-          {saved ? "Saved" : "Save config"}
+          {saving ? <Loader2 className="size-4 animate-spin" /> : saved ? <Check className="size-4" /> : null}
+          {saving ? "Saving…" : saved ? "Saved" : "Save config"}
         </button>
-        <span className="text-xs text-faint">Local-first · on our roadmap</span>
+        <span className="text-xs text-faint">Local-first · your data stays on this machine</span>
       </div>
     </div>
   );

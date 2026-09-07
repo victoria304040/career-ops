@@ -23,6 +23,7 @@ type EvalBody = {
   model?: string;
   url?: string; // OpenAI-compatible base URL
   key?: string; // API key (never persisted; passed to the child only)
+  test?: boolean; // connection test: skip cv.md guard + don't save a report
 };
 
 const SCRIPT: Record<EvalBackend, string> = {
@@ -64,7 +65,8 @@ export async function POST(req: Request) {
   }
 
   // A score is meaningless without a CV to score against (same guard as /api/run).
-  if (!fs.existsSync(path.join(root, "cv.md"))) {
+  // A connection test doesn't need a CV — it only proves the key/endpoint works.
+  if (!body.test && !fs.existsSync(path.join(root, "cv.md"))) {
     return new Response(
       JSON.stringify({ error: "Add your CV first so I can score this against you — drop it on the home page." }),
       { status: 400, headers: { "Content-Type": "application/json" } },
@@ -89,6 +91,9 @@ export async function POST(req: Request) {
   }
   if (backend === "openai" && body.key) {
     args.push("--key", body.key);
+  }
+  if (body.test) {
+    args.push("--no-save");
   }
 
   // Pass the data root explicitly so the evaluator writes to the same files the
